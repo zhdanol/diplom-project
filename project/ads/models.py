@@ -15,9 +15,10 @@ STATE_CHOICES = (
 )
 
 USER_TYPE_CHOICES = (
-    ('shop', 'Магазин'),
-    ('buyer', 'Покупатель')
-    
+    ('admin', 'Администратор'),
+    ('shop', 'Магазин'), 
+    ('employee', 'Работник магазина'),
+    ('buyer', 'Покупатель'),
 )
 
 CONTACT_TYPE = [
@@ -63,6 +64,7 @@ class User(AbstractUser):
     position = models.CharField('Должность', max_length=40, blank=True)
     type = models.CharField('Тип пользователя', choices=USER_TYPE_CHOICES, max_length=10, default='buyer')
     username = models.CharField('Имя пользователя', max_length=100, blank=True, null=True)
+    
     
     class Meta:
         verbose_name = 'пользователь'
@@ -137,7 +139,7 @@ class ProductInfo(models.Model):
     
     class Meta:
         verbose_name = 'Имя продукта'
-        verbose_name_plural = 'Список имён параметров'
+        verbose_name_plural = 'Список параметров продукта'
         ordering = ('-name',)
         
     def __str__(self):
