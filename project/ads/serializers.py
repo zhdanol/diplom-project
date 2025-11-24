@@ -22,16 +22,23 @@ class UserLoginSer(serializers.Serializer):
 
 
 class ContactSer(serializers.ModelSerializer):
-    class Meta:
-        model = Contact
-        fields = ['id', 'country', 'region', 'city', 'street', 'house', 'building', 'structure', 'apartment', 'phone', 'user']
-        
-class UserSer(serializers.ModelSerializer):
-    contacts = ContactSer(read_only=True)        
+    full_address = serializers.SerializerMethodField(read_only=True)
     
     class Meta:
-        model = Category
-        fields = ['id', 'first_name', 'last_name', 'email', 'company', 'position']
+        model = Contact
+        fields = ['id', 'type', 'user', 'value', 'country', 'region', 'city',
+                  'street', 'house', 'building', 'structure', 'apartment', 'phone',
+                  'full_address', 'is_main', 'created_at', 'updated_at']
+        
+    def get_full_address(self, obj):
+        return obj.get_full_address()
+        
+class UserSer(serializers.ModelSerializer):
+    contacts = ContactSer(read_only=True, many=True)        
+    
+    class Meta:
+        model = User
+        fields = ['id', 'first_name', 'last_name', 'email', 'company', 'position', 'type', 'contacts']
         
 class UserRegisterSer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
@@ -40,10 +47,11 @@ class UserRegisterSer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['first_name', 'last_name', 'email', 'password', 'password_confirm']
-        def validate(self, attrs):
-            if attrs['password'] != attrs['password_confirm']:
-                raise serializers.ValidationError('Пароли не совпадают')
-            return attrs
+        
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password_confirm']:
+            raise serializers.ValidationError('Пароли не совпадают')
+        return attrs
     
     def create(self, validated_data):
         validated_data.pop('password_confirm')
@@ -51,7 +59,7 @@ class UserRegisterSer(serializers.ModelSerializer):
             email=validated_data['email'],
             password=validated_data['password'],
             first_name=validated_data.get('first_name',''),
-            last_name=validated_data.get('last_name','')
+            last_name=validated_data.get('last_name',''),
             type = 'buyer'
         )
         return user
@@ -74,7 +82,7 @@ class ProductSer(serializers.ModelSerializer):
     
     class Meta:
         model = Product
-        fields = ['name', 'category']
+        fields = ['id', 'name', 'category']
         
 class ProductParameterSer(serializers.ModelSerializer):
     parameter = serializers.StringRelatedField()
@@ -85,35 +93,44 @@ class ProductParameterSer(serializers.ModelSerializer):
 
 class ProductInfoSer(serializers.ModelSerializer):
     product = ProductSer(read_only=True)
-    parameters = ProductParameterSer(read_only=True, many=True)
+    parameters = ProductParameterSer(read_only=True, many=True, source='product_parameters')
     shop = ShopSer(read_only=True)
     
     class Meta:
         model = ProductInfo
-        fields = ['id', 'product', 'shop', 'model', 'price', 'price_rrc', 'quantity', 'parameters']
+        fields = ['id', 'product', 'shop', 'price', 'price_rrc', 'quantity', 'parameters']
         
 class OrderItemSer(serializers.ModelSerializer):
+    product_info = ProductInfoSer(read_only=True)
     total_price = serializers.SerializerMethodField()
+    
     
     class Meta:
         model = OrderItem
         fields = ['id', 'product_info', 'quantity', 'total_price']
     
-    def total_price(self, obj):
+    def get_total_price(self, obj):
         return obj.quantity * obj.product_info.price
     
 class OrderItemCreateSer(OrderItemSer):
-    product_info = ProductInfoSer(read_only=True)
+    total_price = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = OrderItem
+        fields = ['id', 'product_info', 'quantity', 'total_price']
+        
+    def get_total_price(self, obj):
+        return obj.quantity * obj.product_info.price
     
 class OrderSer(serializers.ModelSerializer):
     ordered_items = OrderItemCreateSer(read_only=True, many=True)
     
-    total_sum = serializers.IntegerField()
+    total_sum = serializers.SerializerMethodField()
     contact = ContactSer(read_only=True)
 
     class Meta:
         model = Order
-        fields = ['id', 'ordered_items', 'state', 'total_sum', 'contact']
+        fields = ['id', 'ordered_items', 'status', 'dt', 'total_sum', 'contact']
         
     def get_total_sum(self, obj):
         return sum(item.quantity*item.product_info.price for item in obj.ordered_items.all())
