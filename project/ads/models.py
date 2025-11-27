@@ -26,6 +26,8 @@ CONTACT_TYPE = [
     ('email', 'email'),
     ('address', 'Адрес'),
 ]
+# Модели
+
 
 class UserManager(BaseUserManager):
     use_in_migrations = True
@@ -51,9 +53,8 @@ class UserManager(BaseUserManager):
             raise ValueError('Superuser must have is_superuser=True.')
         
         return self.create_user(email, password, **extra_fields)
-# Create your models here.
 
-
+# Записи пользователей
 class User(AbstractUser):
     
     REQUIRED_FIELDS = []
@@ -73,6 +74,7 @@ class User(AbstractUser):
         return f'{self.email}({self.get_type_display()})'
     
     
+# Магазины-поставщики товаров
 class Shop(models.Model):
     name = models.CharField(max_length=40, verbose_name='Название')
     url = models.URLField(verbose_name='Ссылка', null=True, blank=True)
@@ -103,6 +105,8 @@ class ConfirmEmailToken(models.Model):
     def __str__(self):
          return f'Токен для {self.user}'
         
+        
+# Категории товаров
 class Category(models.Model):
     name = models.CharField(max_length=40, verbose_name='Название')
     shops = models.ManyToManyField(Shop, verbose_name='Магазины', related_name='categories', blank=True)
@@ -116,6 +120,7 @@ class Category(models.Model):
         return self.name
     
     
+# Основная информация о товаре
 class Product(models.Model):
     name = models.CharField(max_length=100, verbose_name='Название продукта')
     category = models.ForeignKey(Category, verbose_name='Категория', related_name='products', blank=True, on_delete=models.CASCADE)
@@ -128,7 +133,8 @@ class Product(models.Model):
     def __str__(self):
         return self.name
     
-    
+
+# Конкретные данные товара в магазине (цена, количество) 
 class ProductInfo(models.Model):
     name = models.CharField(max_length=100, verbose_name='Название', blank=True)
     product = models.ForeignKey(Product, verbose_name='Продукт', related_name='product_infos', blank=True, on_delete=models.CASCADE)
@@ -172,7 +178,7 @@ class ProductParameter(models.Model):
     def __str__(self):
         return f'{self.product_info}:{self.parameter.name}'
     
-    
+# Заказы пользователей    
 class Order(models.Model):
     user = models.ForeignKey(User, verbose_name='Пользователь', related_name='orders', blank=True, on_delete=models.CASCADE)
     dt = models.DateTimeField(auto_now_add=True)
@@ -186,7 +192,8 @@ class Order(models.Model):
     def __str__(self):
         return f'{self.user}: {self.dt}'
     
-    
+
+# Конкретные товары в заказе
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, verbose_name='Заказ', related_name='order_items', blank=True, on_delete=models.CASCADE)
     product = models.ForeignKey(ProductInfo, verbose_name='Информация о продукте', related_name='order_items', blank=True, on_delete=models.CASCADE)
@@ -200,7 +207,7 @@ class OrderItem(models.Model):
             models.UniqueConstraint(fields=['order', 'product'], name='unique_order_item')
             ]   
 
-
+# Адреса доставки и контакты пользователей
 class Contact(models.Model):
     type = models.CharField(verbose_name='Тип контакта', max_length=20, choices=CONTACT_TYPE, default='phone')
     user = models.ForeignKey(User, verbose_name='Пользователь', related_name='contacts', on_delete=models.CASCADE)

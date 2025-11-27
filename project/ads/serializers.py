@@ -2,6 +2,8 @@ from rest_framework import serializers
 from django.contrib.auth import authenticate
 from ads.models import Category, Shop, Product, ProductInfo, User, OrderItem, Order, ProductParameter, Contact
 
+
+# Валидация данных для входа в систему
 class UserLoginSer(serializers.Serializer):
     email = serializers.EmailField(required=True)
     password = serializers.CharField(required=True)
@@ -20,7 +22,7 @@ class UserLoginSer(serializers.Serializer):
         return attrs
 
 
-
+# Сериализация адресов и контактов доставки
 class ContactSer(serializers.ModelSerializer):
     full_address = serializers.SerializerMethodField(read_only=True)
     
@@ -32,14 +34,17 @@ class ContactSer(serializers.ModelSerializer):
         
     def get_full_address(self, obj):
         return obj.get_full_address()
-        
+
+# Отображение данных пользователя с контактами        
 class UserSer(serializers.ModelSerializer):
     contacts = ContactSer(read_only=True, many=True)        
     
     class Meta:
         model = User
         fields = ['id', 'first_name', 'last_name', 'email', 'company', 'position', 'type', 'contacts']
-        
+
+
+# Создание нового пользователя с проверкой пароля        
 class UserRegisterSer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
     password_confirm = serializers.CharField(write_only=True)
@@ -65,25 +70,30 @@ class UserRegisterSer(serializers.ModelSerializer):
         return user
     
 
+# Базовые данные магазина
 class ShopSer(serializers.ModelSerializer):
     
     class Meta:
         model = Shop
         fields = ['id', 'name', 'state']
 
+# Список категорий для навигации
 class CategorySer(serializers.ModelSerializer):
     
     class Meta:
         model = Category
         fields = ['id', 'name']
 
+# Отображение товара с категорией
 class ProductSer(serializers.ModelSerializer):
     category = serializers.StringRelatedField()
     
     class Meta:
         model = Product
         fields = ['id', 'name', 'category']
-        
+
+
+# Параметры товара        
 class ProductParameterSer(serializers.ModelSerializer):
     parameter = serializers.StringRelatedField()
     
@@ -91,6 +101,8 @@ class ProductParameterSer(serializers.ModelSerializer):
         model = ProductParameter
         fields = ['parameter', 'value']
 
+
+# Детальная информация о товаре с ценами и параметрами
 class ProductInfoSer(serializers.ModelSerializer):
     product = ProductSer(read_only=True)
     parameters = ProductParameterSer(read_only=True, many=True, source='product_parameters')
@@ -99,7 +111,9 @@ class ProductInfoSer(serializers.ModelSerializer):
     class Meta:
         model = ProductInfo
         fields = ['id', 'product', 'shop', 'price', 'price_rrc', 'quantity', 'parameters']
-        
+
+
+# Товар в корзине/заказе с расчетом стоимости        
 class OrderItemSer(serializers.ModelSerializer):
     product_info = ProductInfoSer(read_only=True)
     total_price = serializers.SerializerMethodField()
@@ -112,6 +126,7 @@ class OrderItemSer(serializers.ModelSerializer):
     def get_total_price(self, obj):
         return obj.quantity * obj.product_info.price
     
+# Для операций создания/обновления
 class OrderItemCreateSer(OrderItemSer):
     total_price = serializers.SerializerMethodField()
     
@@ -121,16 +136,18 @@ class OrderItemCreateSer(OrderItemSer):
         
     def get_total_price(self, obj):
         return obj.quantity * obj.product_info.price
-    
+
+
+# Детали заказа с товарами и общей суммой    
 class OrderSer(serializers.ModelSerializer):
-    ordered_items = OrderItemCreateSer(read_only=True, many=True)
+    order_items = OrderItemCreateSer(read_only=True, many=True)
     
     total_sum = serializers.SerializerMethodField()
     contact = ContactSer(read_only=True)
 
     class Meta:
         model = Order
-        fields = ['id', 'ordered_items', 'status', 'dt', 'total_sum', 'contact']
+        fields = ['id', 'order_items', 'status', 'dt', 'total_sum', 'contact']
         
     def get_total_sum(self, obj):
-        return sum(item.quantity*item.product_info.price for item in obj.ordered_items.all())
+        return sum(item.quantity*item.product_info.price for item in obj.order_items.all())

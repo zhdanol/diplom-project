@@ -22,10 +22,12 @@ from ads.models import Shop, Category, Product, ProductInfo, Parameter, ProductP
 from ads.serializers import UserSer, CategorySer, ShopSer, ProductInfoSer, OrderItemSer, OrderSer, ContactSer
 import yaml
 from ads.tasks import send_email
+from .tasks import send_email, send_order_confirmation, send_invoice_admin
 
-# Create your views here.
 load_json=json.loads
         
+        
+# Регистрация нового пользователя
 class RegisterUser(APIView):
     permission_classes = [AllowAny]
     def post(self, request, *args, **kwargs):
@@ -44,12 +46,12 @@ class RegisterUser(APIView):
                     user.set_password(request.data['password'])
                     user.save()
                     token, _ = ConfirmEmailToken.objects.get_or_create(user_id=user.id)
-                    from django.core.mail import send_mail
-                    send_email('Confirmation of registration',
-                               f'Your confirmation token {token.key}',
-                               'olegzdanov87@gmail.com', [user.email],
-                               fail_silently=False,
-                               )
+                    email_result = send_email(
+                        'Подтверждение регистрации',
+                        f'Ваш токен для подтверждения: {token.key}',
+                        user.email
+                    )
+                    print(f'Email sent: {email_result}')
                     
                     return JsonResponse({'Status': True, 'Token for email confirmation': token.key}, status=status.HTTP_201_CREATED)
                 else:
@@ -58,6 +60,7 @@ class RegisterUser(APIView):
         return JsonResponse({'Status': False, 'Errors': 'All necessary argument are not specified'}, status=status.HTTP_400_BAD_REQUEST)
     
 
+# Подтверждение email
 class EmailConfirmUser(APIView):
     permission_classes = [AllowAny]
     def post(self, request, *args, **kwargs):
@@ -75,6 +78,7 @@ class EmailConfirmUser(APIView):
         return JsonResponse({'Status': False, 'Error': 'All necessary argument are not specified'})
     
     
+# Авторизация пользователя
 class LoginUser(APIView):
     permission_classes = [AllowAny]
     def post(self, request, *args, **kwargs):
@@ -101,7 +105,8 @@ class LoginUser(APIView):
         else:
             return JsonResponse({'Status': False, 'Errors': 'Invalid email or password'}, status=status.HTTP_401_UNAUTHORIZED)
         
-        
+
+# Каталог товаров        
 class ProductInfoView(ListAPIView):
     permission_classes = [IsAuthenticated]
     
@@ -120,17 +125,21 @@ class ProductInfoView(ListAPIView):
             queryset = queryset.filter(product__category_id=category_id)
         
         return queryset
-    
+
+
+# Список категорий    
 class CategoryView(APIView):
     queryset = Category.objects.all()
     serializer_class = CategorySer
 
 
+# Список магазинов
 class ShopView(APIView):
     queryset = Shop.objects.filter(state=True)
     serializer_class = ShopSer
 
 
+# Работа с корзиной покупок
 class CartView(APIView):
     permission_classes = [IsAuthenticated]
     
@@ -138,15 +147,20 @@ class CartView(APIView):
         if not request.user.is_authenticated:
             return JsonResponse({'Status': False, 'Error': 'Login required'}, status=status.HTTP_403_FORBIDDEN)
         
-        cart = Order.objects.filter(
-            user_id=request.user.id, status='cart').prefetch_related(
-                'ordered_items__product_info').annotate(
-                    total_sum=Sum(F('ordered_items__quantity')* F('ordered_items__product_info__price'))).first()
-        if cart:
-            serializer = OrderSer(cart)
-            return Response(serializer.data)
-        return Response({'Status': True, 'Cart': {}})
-    
+        try:
+            cart = Order.objects.filter(user_id=request.user.id, status='cart').first()
+            
+            if cart:
+                return Response({
+                    'id': cart.id,
+                    'status': cart.status,
+                    'message': 'Cart exists'
+                })
+            return Response({'Status': True, 'Cart': {}})
+            
+        except Exception as e:
+            return JsonResponse({'Status': False, 'Error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
     def post(self, request, *args, **kwargs):
         if not request.user.is_authenticated:
             return JsonResponse({'Status': False, 'Error': 'Login required'}, status=status.HTTP_403_FORBIDDEN)
@@ -163,10 +177,11 @@ class CartView(APIView):
                 objects_create = 0
                 for item_data in items_dict:
                     try:
-                        product_info = ProductInfo.objects.get(id=item_data['product_info'])
+                        product = ProductInfo.objects.get(id=item_data['product_id'])
                         order_item, created = OrderItem.objects.get_or_create(
                             order=cart,
-                            product_info=product_info,
+                            product=product,
+                            shop=product.shop,
                             defaults={'quantity': item_data['quantity']}
                         )
                         if not created:
@@ -200,10 +215,10 @@ class CartView(APIView):
                     if isinstance(order_item.get('id'), int) and isinstance(order_item.get('quantity'), int):
                         updated = OrderItem.objects.filter(
                             order_id = cart.id,
-                            product_info_id=order_item['id']).update(quantity=order_item['quantity'])
+                            product_id=order_item['id']).update(quantity=order_item['quantity'])
                         objects_update += updated
                         
-                return JsonResponse({'Status': True, 'Objects create': objects_update})
+                return JsonResponse({'Status': True, 'Objects_update': objects_update})
             
         return JsonResponse({'Status': False, 'Error': 'Argument are not specified'}, status=status.HTTP_400_BAD_REQUEST)
     
@@ -225,11 +240,12 @@ class CartView(APIView):
                     
             if objects_deleted:
                 deleted_count = OrderItem.objects.filter(query).delete()[0]
-                return JsonResponse({'Status': True, 'Objects create': deleted_count}, status=status.HTTP_200_OK)
+                return JsonResponse({'Status': True, 'Objects_deleted': deleted_count}, status=status.HTTP_200_OK)
             
         return JsonResponse({'Status': False, 'Error': 'Arguments are not specified'}, status=status.HTTP_400_BAD_REQUEST)
 
 
+# Управление статусом магазина
 class PartnerState(APIView):
     def get(self, request, *args, **kwargs):
         if not request.user.is_authenticated or request.user.type != 'shop':
@@ -253,16 +269,17 @@ class PartnerState(APIView):
             
         return JsonResponse({'Status': False, 'Errors': 'Arguments are not specified'})
     
-    
+
+# Заказы магазина    
 class PartnerOrders(APIView):
     def get(self, request, *args, **kwargs):
         if not request.user.is_authenticated or request.user.type != 'shop':
             return JsonResponse({'Status': False, 'Error': 'For only shops'}, status=status.HTTP_403_FORBIDDEN)
         
         order = Order.objects.filter(
-            ordered_items__product_info__shop__user_id = request.user.id).exclude(status='cart').prefetch_related(
-                'ordered_items__product_info').select_related('contact').annotate(
-                    total_sum=Sum(F('ordered_items__quantity')* F('ordered_items__product_info__price'))).distinct()
+            order_items__product__shop__user_id = request.user.id).exclude(status='cart').prefetch_related(
+                'order_items__product').select_related('contact').annotate(
+                    total_sum=Sum(F('order_items__quantity')* F('order_items__product__price'))).distinct()
                 
         serializer = OrderSer(order, many=True)
         from django.core.mail import send_mail
@@ -275,7 +292,8 @@ class PartnerOrders(APIView):
         )
         return Response(serializer.data)    
     
-    
+
+# Обновление каталога товаров    
 class PartnerUpdate(APIView):
     def post(self, request, *args, **kwargs):
         if not request.user.is_authenticated:
@@ -305,13 +323,13 @@ class PartnerUpdate(APIView):
                     product, _ =Product.objects.get_or_create(name=item['name'], category_id=item['category'])
                     product_info = ProductInfo.objects.create(
                         product_id=product.id,
-                        model=item.get('model'),
+                        name=item.get('name', ''),
                         price=item['price'],
                         price_rrc=item['price_rrc'],
                         quantity=item['quantity'],
                         shop_id=shop.id)
                     
-                    for name, value in item.get('parameters').items():
+                    for name, value in item.get('parameters', {}).items():
                         parameter_objects, _ = Parameter.objects.get_or_create(name=name)
                         ProductParameter.objects.create(product_info_id=product_info.id,
                                                         parameter_id=parameter_objects.id,
@@ -321,7 +339,8 @@ class PartnerUpdate(APIView):
             
         return JsonResponse({'Status': False, 'Errors': 'not specified'}, status=status.HTTP_400_BAD_REQUEST)       
      
-     
+
+# Контакты пользователя     
 class ContactView(APIView):
     def get(self, request, *args, **kwargs):
         if not request.user.is_authenticated:
@@ -376,29 +395,56 @@ class ContactView(APIView):
         return JsonResponse({'Status':False, 'Error': 'Argument are not specified'}, status=status.HTTP_400_BAD_REQUEST)
 
 
+# Просмотр и оформление заказов
 class OrderView(APIView):
     def get(self, request, *args, **kwargs):
-        order = Order.objects.filter(
-            user_id=request.user.id).exclude(status='cart').prefetch_related(
-                'ordered_items__product_info').select_related('contact').annotate(
-                    total_sum=Sum(F('ordered_items__quantity')* F('ordered_items__product_info__price'))
-                ).distinct().order_by('-dt')
-        serializer = OrderSer(order, many=True)
-        return Response(serializer.data)
+
+        order_id = kwargs.get('pk')
+        
+        if order_id:
+
+            try:
+                order = Order.objects.get(id=order_id, user_id=request.user.id)
+                return Response({
+                    'id': order.id,
+                    'status': order.status,
+                    'dt': order.dt,
+                    'message': 'Order details'
+                })
+            except Order.DoesNotExist:
+                return JsonResponse({'Status': False, 'Errors': 'Order not found'}, status=status.HTTP_404_NOT_FOUND)
+        else:
+
+            try:
+                orders = Order.objects.filter(user_id=request.user.id).exclude(status='cart').order_by('-dt')
+                orders_data = []
+                for order in orders:
+                    orders_data.append({
+                        'id': order.id,
+                        'status': order.status,
+                        'dt': order.dt
+                    })
+                return Response(orders_data)
+            except Exception as e:
+                return JsonResponse({'Status': False, 'Error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     def post(self, request, *args, **kwargs):
-        if {'id', 'contact'}.issubset(request.data):
+        if {'id'}.issubset(request.data):
             try:
                 order = Order.objects.get(
-                    user_id = request.user.id, id=request.data['id'],
-                    status='cart')
-                order.contact_id = request.data['contact']
+                    user_id=request.user.id, 
+                    id=request.data['id'],
+                    status='cart'
+                )
+
                 order.status = 'new'
                 order.save()
                 
-                from ads.tasks import send_invoice_admin
+                confirmation_result = send_order_confirmation(order.id)
+                print(f"Order confirmation: {confirmation_result}")
+                
                 invoice_result = send_invoice_admin(order.id)
-                print(f' Накладная: {invoice_result}')
+                print(f"Invoice to admin: {invoice_result}")
                 
                 return JsonResponse({
                     'Status': True,
@@ -412,5 +458,4 @@ class OrderView(APIView):
                 return JsonResponse({'Status': False, 'Errors': f'Argument incorrectly{err}'}, status=status.HTTP_400_BAD_REQUEST)
             
         return JsonResponse({'Status': False, 'Errors': 'Required fields are not specified'}, status=status.HTTP_400_BAD_REQUEST)
-
             
