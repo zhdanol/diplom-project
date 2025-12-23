@@ -11,7 +11,11 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
-
+import os
+import sentry_sdk
+from sentry_sdk.integrations.django import DjangoIntegration
+from sentry_sdk.integrations.celery import CeleryIntegration
+from sentry_sdk.integrations.redis import RedisIntegration
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -31,22 +35,31 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
+    'baton',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'django_rest_passwordreset',
+    'django.contrib.sites',
     
+    'django_rest_passwordreset',
     'rest_framework',
     'rest_framework.authtoken',
     'django_filters',
-    'drf_yasg',
-    'ads',
-
+    'drf_spectacular',
+    'social_django',
+    'cachalot',
+    'imagekit',
+    'silk',
     
+    'ads',
+    
+    'baton.autodiscover',
 ]
+
+SITE_ID = 1
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
@@ -61,12 +74,40 @@ REST_FRAMEWORK = {
         'rest_framework.filters.OrderingFilter',
         'rest_framework.filters.SearchFilter',
     ],
-    'DEFAULT_SCHEMA_CLASS': 'rest_framework.schemas.coreapi.AutoSchema',
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 20
+    'PAGE_SIZE': 20,
+    
+    'DEFAULT_TROTTLE_CLASSES':[
+        'rest_framework.trottling.AnonRateThrottle',
+        'rest_framework.trottling.UserRateThrottle'
+    ],
+    'DEFAULT_THROTTLE_RATES':{
+        'anon': '100/day',
+        'user': '1000/day',
+        'burst': '60/minute',
+        'sustained': '1000/day',
+        'login': '10/minute',
+        'registration': '5/minute',
+        'partner': '100/day',
+        'product_update': '10/hour',
+        'social-auth': '20/hour',
+    }
 }
 
-
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Интернет-магазин API',
+    'DESCRIPTION': 'Документация API интернет-магазина',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'SWAGGER_UI_SETTINGS': {
+        'deepLinking': True,
+        'persistAuthorization': True,
+        'displayOperationId': True,
+    },
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SCHEMA_PATH_PREFIX': '/api/',
+}
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -76,6 +117,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'social_django.middleware.SocialAuthExceptionMiddleware',
+    'silk.middleware.SilkyMiddleware',
 ]
 
 ROOT_URLCONF = 'project.urls'
@@ -90,6 +133,8 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'social_django.context_processors.backends',
+                'social_django.context_processors.login_redirect',
             ],
         },
     },
@@ -105,7 +150,7 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'diplomdatabase',
-        'USER': 'postgres', 
+        'USER': 'you_user', 
         'PASSWORD': 'your_password',
         'HOST': 'localhost',
         'PORT': '5432',
@@ -147,7 +192,11 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_DIRS = [BASE_DIR / 'static']
 
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
@@ -160,15 +209,51 @@ EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = 'your_email@gmail.com'
-EMAIL_HOST_PASSWORD = 'your_password'
+EMAIL_HOST_USER = 'yourmail.com'
+EMAIL_HOST_PASSWORD = 'password'
 EMAIL_USE_SSL = False
 
-ADMIN_EMAIL = 'admin_email@gmail.com'
+ADMIN_EMAIL = 'yourmail.com'
 
 
-CELERY_BROKER_URL = 'redis://localhost:6379/0'
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+SENTRY_DSN = os.getenv('SENTRY_DSN', '')
+SENTRY_ENVIRONMENT = 'development' if DEBUG else 'production'
+if SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=SENTRY_ENVIRONMENT,
+        release='internet-shop@1.0.0',
+        
+
+        integrations=[
+            DjangoIntegration(
+                transaction_style='url',
+                middleware_spans=True,
+                signals_spans=False,
+                cache_spans=True,
+            ),
+            CeleryIntegration(
+                monitor_beat_tasks=True,
+                propagate_traces=True,
+            ),
+            RedisIntegration(),
+        ],
+        
+
+        traces_sample_rate=1.0 if DEBUG else 0.1,
+        profiles_sample_rate=1.0 if DEBUG else 0.1,
+        
+
+        send_default_pii=True,
+        debug=DEBUG,
+        
+
+        ignore_errors=[
+            'django.http.Http404',
+            'django.core.exceptions.PermissionDenied',
+        ],
+    )
+
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
@@ -186,4 +271,147 @@ SWAGGER_SETTINGS = {
         }
     },
     'USE_SESSION_AUTH': False,
+}
+
+
+AUTHENTICATION_BACKENDS = (
+    'social_core.backends.google.GoogleOAuth2',
+    'social_core.backends.github.GithubOAuth2',
+    'django.contrib.auth.backends.ModelBackend',
+)
+SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = os.getenv('GOOGLE_OAUTH2_KEY', 'ваш-google-client-id')
+SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = os.getenv('GOOGLE_OAUTH2_SECRET', 'ваш-google-client-secret')
+
+SOCIAL_AUTH_GITHUB_KEY = os.getenv('GITHUB_OAUTH2_KEY','ваш-github-client-id')
+SOCIAL_AUTH_GITHUB_SECRET = os.getenv('GITHUB_OAUTH2_SECRET', 'ваш-github-client-secret')
+
+LOGIN_URL = '/login/'
+LOGIN_REDIRECT_URL = '/'
+LOGOUT_REDIRECT_URL = '/'
+SOCIAL_AUTH_URL_NAMESPACE = 'social'
+SOCIAL_AUTH_LOGIN_ERROR_URL = '/api/login/error/'
+SOCIAL_AUTH_RAISE_EXCEPTIONS = False
+
+SOCIAL_AUTH_PIPELINE = (
+    'social_core.pipeline.social_auth.social_details',
+    'social_core.pipeline.social_auth.social_uid',
+    'social_core.pipeline.social_auth.auth_allowed',
+    'social_core.pipeline.social_auth.social_user',
+    'social_core.pipeline.user.get_username',
+    'social_core.pipeline.social_auth.associate_by_email',
+    'social_core.pipeline.user.create_user',
+    'social_core.pipeline.social_auth.associate_user',
+    'social_core.pipeline.social_auth.load_extra_data',
+    'social_core.pipeline.user.user_details',
+    'ads.pipeline.save_user_profile',
+)
+
+
+SOCIAL_AUTH_GOOGLE_OAUTH2_IGNORE_DEFAULT_SCOPE = True
+SOCIAL_AUTH_GOOGLE_OAUTH2_SCOPE = [
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile'
+]
+
+SOCIAL_AUTH_GITHUB_SCOPE = ['user:email']
+
+
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-snowflake',
+    },
+    'cachalot': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'cachalot-cache',
+    },
+    'imagekit': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'imagekit-cache',
+    }
+}
+
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+
+CACHALOT_ENABLED = True
+CACHALOT_CACHE = 'cachalot'
+CACHALOT_TIMEOUT = 3600
+
+CACHALOT_ONLY_CACHABLE_TABLES = {
+    'ads_category',
+    'ads_shop', 
+    'ads_product',
+    'ads_productinfo',
+    'ads_parameter',
+    'ads_productparameter',
+}
+
+CACHALOT_UNCACHABLE_TABLES = {
+    'django_session',
+    'django_migrations',
+    'django_admin_log',
+    'auth_user',
+    'auth_group',
+    'auth_permission',
+    'authtoken_token',
+    'social_auth_usersocialauth',
+    'social_auth_partial',
+    'ads_user',
+    'ads_order',
+    'ads_orderitem',
+    'ads_contact',
+    'ads_confirmemailtoken',
+    'ads_productimage'
+}
+
+
+DEFAULT_FILE_STORAGE = 'django.core.files.storage.FileSystemStorage'
+
+IMAGEKIT_CACHEFILE_DIR = 'CACHE/images'
+IMAGEKIT_SPEC_CACHEFILE_NAMER = 'imagekit.cachefiles.namers.source_name_dot_hash'
+IMAGEKIT_DEFAULT_CACHEFILE_BACKEND = 'imagekit.cachefiles.backends.Simple'
+IMAGEKIT_DEFAULT_CACHEFILE_STRATEGY = 'imagekit.cachefiles.strategies.JustInTime'
+
+IMAGEKIT_DEFAULT_IMAGE_QUALITY = 85
+IMAGEKIT_DEFAULT_IMAGE_FORMAT = 'JPEG'
+IMAGEKIT_CACHE_BACKEND = 'imagekit'
+
+SILKY_PYTHON_PROFILER = True
+SILKY_PYTHON_PROFILER_BINARY = True
+SILKY_PYTHON_PROFILER_RESULT_PATH = os.path.join(BASE_DIR, 'profiles')
+SILKY_META = True
+SILKY_AUTHENTICATION = True
+SILKY_AUTHORISATION = True
+SILKY_PERMISSIONS = lambda user: user.is_superuser
+SILKY_INTERCEPT_PERCENT = 100
+SILKY_MAX_RECORDED_REQUESTS = 10**4
+SILKY_MAX_RECORDED_REQUESTS_CHECK_PERCENT = 10
+
+SILKY_ANALYZE_QUERIES = True
+SILKY_EXPLAIN_FLAGS = {
+    'verbose': True,
+    'costs': True,
+    'buffers': True,
+    'timing': True,
+    'summary': True,
+    'format': 'text'
+}
+SILKY_SENSITIVE_KEYS = ['password', 'secret', 'key', 'api_key', 'token', 'access', 'refresh']
+
+BATON = {
+    'SITE_HEADER': 'Интернет-магазин',
+    'SITE_TITLE': 'Панель управления',
+    'INDEX_TITLE': 'Администрирование',
+    'SUPPORT_HREF': 'https://github.com/zhdanol',
+    'COPYRIGHT': 'copyright © 2025 Интернет-магазин',
+    'POWERED_BY': '<a href="https://github.com/zhdanol">Oleg</a>',
+    'CONFIRM_UNSAVED_CHANGES': True,
+    'SHOW_MULTIPART_UPLOADING': True,
+    'ENABLE_IMAGES_PREVIEW': True,
+    'CHANGELIST_FILTERS_IN_MODAL': True,
+    'MENU_ALWAYS_COLLAPSED': False,
+    'MENU_TITLE': 'Меню',
+    'GRAVATAR_DEFAULT_IMG': 'retro',
 }

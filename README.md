@@ -75,3 +75,36 @@ python manage.py createsuperuser
 python manage.py runserver
 '''
 
+# UPDATE:
+
+### Тестирование 
+- Используется `coverage` для тестирования
+
+### Throttling
+- Был добавлен throttling
+
+### Social Auth
+- OAuth2 аутентификация
+
+### Админ-панель 
+- Django Baton
+
+### Обработка изображений 
+- ImageKit
+
+### Sentry 
+- мониторинг ошибок
+
+### Кэширование 
+- Redis
+- Cachalot
+
+### Silk
+- Django Silk
+
+## Запуск тестов
+
+'''
+coverage run --source="ads" manage.py test
+coverage report
+'''

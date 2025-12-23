@@ -3,6 +3,25 @@ from django.contrib.auth.base_user import BaseUserManager
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django_rest_passwordreset.tokens import get_token_generator
+from imagekit.models import ImageSpecField, ProcessedImageField
+from imagekit.processors import ResizeToFill, ResizeToFit, SmartResize, Transpose
+from .imagekit_ import ProductThumbnail, ProductMedium, ProductLarge, ProductWebP, AdminThumbnail
+from django.core.validators import FileExtensionValidator
+from PIL import Image
+from io import BytesIO
+from django.core.files.base import ContentFile
+
+def optimize_image(image_field, max_size=(1200, 1200), quality=85):
+    img = Image.open(image_field)
+    
+    if img.width > max_size[0] or img.height > max_size[1]:
+        img.thumbnail(max_size, Image.Resampling.LANCZOS)
+        
+    output = BytesIO()
+    img.save(output, format='JPEG', quality=quality, optimize=True)
+    output.seek(0)
+    
+    return ContentFile(output.read(), image_field.name)
 
 STATE_CHOICES = (
     ('cart', 'Корзина'),
@@ -119,11 +138,110 @@ class Category(models.Model):
     def __str__(self):
         return self.name
     
+class ProductImage(models.Model):
+    product = models.ForeignKey(
+        'Product',
+        on_delete=models.CASCADE, 
+        related_name='images',
+        verbose_name='Товар'
+    )
+    image = ProcessedImageField(
+        upload_to='product_images/%Y/%m/%d/',
+        processors=[Transpose()],
+        format='JPEG',
+        options={'quality': 85},
+        verbose_name='Оригинальное изображение',
+        validators=[FileExtensionValidator(allowed_extensions=['jpg', 'jpeg', 'png', 'webp'])]
+    )
+    is_main = models.BooleanField(default=False, verbose_name='Гдавное изображение')
+    alt_text = models.CharField(max_length=255, blank=True, verbose_name='Описание изображения')
+    order = models.PositiveIntegerField(default=0, verbose_name='Порядок')
+    
+    thumbnail = ImageSpecField(
+        source='image',
+        id='ads:product_thumbnail',  # ID зарегистрированной спецификации
+    )
+    
+    medium = ImageSpecField(
+        source='image',
+        id='ads:product_medium',
+    )
+    
+    large = ImageSpecField(
+        source='image',
+        id='ads:product_large',
+    )
+    
+    web_optimized = ImageSpecField(
+        source='image',
+        id='ads:product_webp',
+    )
+    
+    admin_thumbnail = ImageSpecField(
+        source='image',
+        id='ads:admin_thumbnail',
+    )
+    catalog_preview = ImageSpecField(
+        source='image',
+        processors=[Transpose(), ResizeToFill(300, 200)],
+        format='JPEG',
+        options={'quality': 80}
+    )
+    
+    mobile_optimized = ImageSpecField(
+        source='image',
+        processors=[Transpose(), SmartResize(600, 600)],
+        format='JPEG',
+        options={'quality': 75}
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата создания')
+    update_at = models.DateTimeField(auto_now=True, verbose_name='Дата обновления')
+    
+    class Meta:
+        verbose_name = 'Изображение товара'
+        verbose_name_plural = 'Изображение товара'
+        ordering = ['order', 'created_at']
+        unique_together = ['product', 'is_main']
+        
+    def __str__(self):
+        return f"Изображение для {self.product.name}"
+    
+    def save(self, *args, **kwargs):
+        if self.is_main:
+            ProductImage.objects.filter(
+                product=self.product,
+                is_main=True
+            ).exclude(pk=self.pk).update(is_main=False)
+        
+        if self.image and not self.pk:
+            optimized_image = optimize_image(self.image)
+            self.image.save(self.image.name, optimized_image, save=False)
+        
+        super().save(*args, **kwargs)
+        
+    def get_absolute_url(self):
+        from django.urls import reverse
+        return reverse('product-image-detail', kwargs={'pk': self.pk})
+    
+    def get_all_variants(self):
+        return {
+            'original': self.image.url,
+            'thumbnail': self.thumbnail.url if hasattr(self.thumbnail, 'url') else None,
+            'medium': self.medium.url if hasattr(self.medium, 'url') else None,
+            'large': self.large.url if hasattr(self.large, 'url') else None,
+            'web_optimized': self.web_optimized.url if hasattr(self.web_optimized, 'url') else None,
+            'admin_thumbnail': self.admin_thumbnail.url if hasattr(self.admin_thumbnail, 'url') else None,
+            'catalog_preview': self.catalog_preview.url if hasattr(self.catalog_preview, 'url') else None,
+            'mobile_optimized': self.mobile_optimized.url if hasattr(self.mobile_optimized, 'url') else None,
+        }        
     
 # Основная информация о товаре
 class Product(models.Model):
     name = models.CharField(max_length=100, verbose_name='Название продукта')
     category = models.ForeignKey(Category, verbose_name='Категория', related_name='products', blank=True, on_delete=models.CASCADE)
+    description = models.TextField(blank=True, verbose_name='Описание')
+    sku = models.CharField(max_length=50, unique=True, blank=True, null=True, verbose_name='Артикул')
     
     class Meta:
         verbose_name = 'Продукт'
@@ -133,6 +251,21 @@ class Product(models.Model):
     def __str__(self):
         return self.name
     
+    def get_main_image(self):
+        return self.images.filter(is_main=True).first()
+
+    def get_image_url(self, size='medium'):
+        main_image = self.get_main_image()
+        if main_image:
+            if size == 'thumbnail':
+                return main_image.thumbnail.url
+            elif size == 'large':
+                return main_image.large.url
+            elif size == 'web':
+                return main_image.web_optimized.url
+            else:
+                return main_image.medium.url
+        return None
 
 # Конкретные данные товара в магазине (цена, количество) 
 class ProductInfo(models.Model):
@@ -293,3 +426,4 @@ class Contact(models.Model):
             self.value = self.get_full_address()
         
         super().save(*args, **kwargs)
+        
